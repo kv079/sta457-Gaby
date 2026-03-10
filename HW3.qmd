@@ -62,21 +62,32 @@ model    <- specify(ar     = fit.arma$coef["ar1"],
 
 kable(t(as.data.frame(model)), caption = "ARMA(1,1) Model Parameters")
 
-# --- Step 5: Forecast 24 hours ahead  [itsmr: forecast()]
-fc <- itsmr::forecast(y.resid, model, h = 24)
+# --- Step 5: Forecast 24 hours ahead (manual ARMA(1,1) h-step prediction)
+h     <- 24
+phi   <- as.numeric(fit.arma$coef["ar1"])
+theta <- as.numeric(fit.arma$coef["ma1"])
+sig2  <- fit.arma$sigma2
+innov <- as.numeric(residuals(fit.arma))
+
+# 1-step: E[X_{n+1}|X_1,...,X_n] = phi*X_n + theta*Z_n
+fc1 <- phi * tail(y.resid, 1) + theta * tail(innov, 1)
+
+# h-step (h>=2): MA term vanishes, forecast = phi^(h-1) * fc1
+fc.mean <- c(fc1, phi^(1:(h - 1)) * fc1)
+
+# 95% prediction intervals via psi-weights:
+#   psi_0 = 1,  psi_j = (phi + theta) * phi^(j-1) for j >= 1
+psi   <- c(1, (phi + theta) * phi^(0:(h - 2)))
+fc.se <- sqrt(cumsum(psi^2) * sig2)
 
 # --- Step 6: Reconstruct full temperature forecast
-#   Project the quadratic trend forward to hours 169–192
 t.future <- (n + 1):(n + 24)
 m.future <- predict(m.fit, newdata = data.frame(t.vec = t.future))
-
-#   Seasonal pattern repeats every 24 hours; hours 169–192 match hours 1–24
 s.future <- s.season[1:24]
 
-# Access forecast columns by index (robust across itsmr versions)
-pred.temp  <- fc[, 1] + m.future + s.future
-pred.lower <- fc[, 2] + m.future + s.future
-pred.upper <- fc[, 3] + m.future + s.future
+pred.temp  <- fc.mean + m.future + s.future
+pred.lower <- (fc.mean - 1.96 * fc.se) + m.future + s.future
+pred.upper <- (fc.mean + 1.96 * fc.se) + m.future + s.future
 ```
 
 ---
