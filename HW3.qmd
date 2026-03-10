@@ -63,7 +63,7 @@ model    <- specify(ar     = fit.arma$coef["ar1"],
 kable(t(as.data.frame(model)), caption = "ARMA(1,1) Model Parameters")
 
 # --- Step 5: Forecast 24 hours ahead  [itsmr: forecast()]
-fc <- forecast(y.resid, model, h = 24)
+fc <- itsmr::forecast(y.resid, model, h = 24)
 
 # --- Step 6: Reconstruct full temperature forecast
 #   Project the quadratic trend forward to hours 169–192
