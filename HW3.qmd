@@ -40,10 +40,12 @@ with period $d = 24$ hours, then fit ARMA(1,1) to the residuals and forecast
 24 steps ahead using `forecast()` from `itsmr`.
 
 ```{r p1-forecast}
-# --- Step 1: Remove quadratic trend (p = 2)  [Workshop 2 method]
-t.vec   <- 1:n
-m.fit   <- lm(may17 ~ t.vec + I(t.vec^2))
-m.trend <- fitted(m.fit)
+# --- Step 1: Remove quadratic trend (p = 2)  [itsmr: trend()]
+m.trend <- trend(may17, p = 2)
+
+# Also fit lm() to extrapolate the trend beyond the observed data
+t.vec    <- 1:n
+m.fit    <- lm(may17 ~ t.vec + I(t.vec^2))
 
 # --- Step 2: Remove seasonal component, period = 24 hours  [itsmr: season()]
 resid.m  <- may17 - m.trend
@@ -64,16 +66,17 @@ kable(t(as.data.frame(model)), caption = "ARMA(1,1) Model Parameters")
 fc <- forecast(y.resid, model, h = 24)
 
 # --- Step 6: Reconstruct full temperature forecast
-#   Project the quadratic trend forward (hours 169–192)
+#   Project the quadratic trend forward to hours 169–192
 t.future <- (n + 1):(n + 24)
 m.future <- predict(m.fit, newdata = data.frame(t.vec = t.future))
 
-#   Seasonal pattern repeats every 24 hours; hours 169–192 = same as hours 1–24
+#   Seasonal pattern repeats every 24 hours; hours 169–192 match hours 1–24
 s.future <- s.season[1:24]
 
-pred.temp  <- fc[, "Predicted"] + m.future + s.future
-pred.lower <- fc[, "Lower"]     + m.future + s.future
-pred.upper <- fc[, "Upper"]     + m.future + s.future
+# Access forecast columns by index (robust across itsmr versions)
+pred.temp  <- fc[, 1] + m.future + s.future
+pred.lower <- fc[, 2] + m.future + s.future
+pred.upper <- fc[, 3] + m.future + s.future
 ```
 
 ---
