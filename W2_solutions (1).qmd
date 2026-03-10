@@ -1,0 +1,310 @@
+---
+title: "Workshop 2: the PEN"
+subtitle: |
+    | STA457/2202 - Winter 2026  
+    | Time Series Analysis
+    | Skye P. Griffith, University of Toronto
+format: 
+  pdf:
+    fig-width: 8.5
+---
+
+# Setup
+
+Quarto renders from a blank slate: it runs code chunks *in order,* and based on an *empty environment.* That means you'll have to load any packages you'll be using, even if they're already loaded in your R session. You'll also have to load any data you plan to work with. Do all this at the beginning of the document, so the rest of your chunks are ready to run.
+
+#### Packages
+
+`itsmr` (from the textbook) If you need to install it, run the code
+
+```{r}
+#| eval: false
+install.packages("itsmr")
+```
+
+in the console. The CONSOLE. Not the SCRIPT.
+
+```{r}
+#| label: Setup
+#| warning: false
+
+library(itsmr) # Load ITSMR
+```
+
+#### Data
+
+| **Info** | **Description** |
+|:-------------------|:---------------------------------------------------|
+| **Dataset** | Happy Australian Red Wine Sales (unit = kilolitres) |
+|  |  |
+| **Times Sampled** | (Monthly) Jan, 1980 $-$ Oct, 1991 (142 total obs.) |
+|  |  |
+| **Source** | [ITSM](https://extras.springer.com/) Time Series Package |
+
+It's included with the ITSMR package, so we don't need to load any external files.
+
+# Plotting
+
+```{r}
+#| label: bad-plot
+plot(wine)
+```
+
+Okay... this doesn't really tell us what's going on. It doesn't demonstrate the data's most interesting patterns, and it doesn't give the viewer any context. Let's now create a scientifically meaningful plot of the data, with an appropriate x (time) axis.
+
+```{r}
+#| label: good-plot
+
+year.ticks <- 12*(0:11) + 1 # indicate 1 tick every January (total = 12)
+
+axis.wine <- function(){
+  axis(side = 1,            # bottom edge of plot
+       at   = year.ticks,   # tick placement
+       labels = 1980:1991,  # tick labels
+       las = 3)             # sideways years, if you want <3
+}
+plot.wine <- function(){
+  plot.ts(wine,
+          main = "Happy Austrailian Red Wine Sales",  # main title
+          xlab = "Time (in years)",                   # x-axis label
+          ylab = "Volume Sold (kL)",                  # y-axis label
+          type = "o",                                 # lines + points
+          pch = 20, cex = 0.6,                        # bullets (trust me)
+          xaxt = 'n')                                 # NO X-AXIS TICKS! (yet)
+  axis.wine() # add x-axis 
+}
+
+plot.wine()
+```
+
+# Analysis
+
+#### The Plan
+
+We want to decompose the data according to the classical model $$
+X_t = m_t + s_t + Y_t \qquad (\star)
+$$ Think of it like this: $X_t$ is a pen, and $x_t$ are the lines drawn by the pen. We've run out of ink. So now we have to get a tube of the same coloured ink that will fit the pen's model.
+
+1.  **Eliminate** ${m_t:}$\
+    This is the shell $-$ the *general shape* of the pen. Remove it.\
+    What your left with is $\hat r_m = X_t - \hat m_t$.
+2.  **Extract** ${s_t:}$\
+    Remove the spring + clicky components that are responsible for the pen's *repetitive pattern* of being open-closed-open-closed.\
+    Now you have $\hat r = X_t - \hat m_t - \hat s_t$ (the ink tube).
+3.  **Examine** ${Y_t:}$\
+    Look at this tube of *residual* ink. How long/wide is it? What colour is the ink?
+
+Later in this course, we'll learn where to get more ink and how to reconstruct the pen.
+
+# Eliminate $\mathbf{m_t:}$ The Body of the pen
+
+#### Polynomial Regression
+
+We suspect there may be a linear trend. Or, it's possible that a shallow quadratic may fit the data. I'm going to go with linear, that is, $p=1$.
+
+```{r}
+#| label: poly-regression
+
+# --- Estimation
+m.pr <- trend(wine, p = 1)
+
+# --- Plotting
+plot.wine()
+mtext("Polynomial Regression: p = 1") # Adds a subtitle
+lines(m.pr, col = "blue")
+```
+
+Now we need to compute and plot the residuals: $(x_t - \hat m_t)$. Think: ink tube + spring
+
+```{r}
+#| label: pr-residuals
+
+# --- Residuals
+rm.pr <- wine - m.pr
+
+# --- Plot
+plot.ts(rm.pr,
+        main = "Happy Wine Residuals",
+        ylab = "Residual Value",
+        xaxt = 'n')
+axis.wine(); mtext("Polynomial Regression: p = 1")
+abline(h = 0, lty = 2)  # (draws a dashed line at y = 0)
+```
+
+What we want to see is some kind of noisy but regular wave-like structure, since we plan to model seasonality, next. These residuals look ready to go. If there was a linear/curved trend remaining, we would want to consider a different model.
+
+#### MA Smoothing
+
+Let's repeat the same process, using a moving average smoother $(q=7)$ instead of polynomial regression. We'll plot the estimate and residuals side-by-side.
+
+```{r}
+#| label: MA-smoother
+
+# --- Trend Estimation & Residuals
+m.ma <- smooth.ma(wine, q = 7)
+rm.ma <- wine - m.ma
+
+# --- Plotting
+par(mfrow = c(1,2))   # Matrix of plots: 1 row, 2 columns
+
+# Estimated m_t
+plot.wine(); mtext("MA smoother: q = 7")
+lines(m.ma, col = "red")
+
+# Residuals from m_t
+plot.ts(rm.ma,
+        main = "Happy Wine Residuals",
+        ylab = "Residual Value",
+        xaxt = 'n')
+axis.wine(); mtext("MA smoother: q = 7")
+abline(h = 0, lty = 2)
+```
+
+#### Exponential Smoothing
+
+We now repeat the whole thing using an exponential smoother with parameter $\alpha = 0.2$
+
+```{r}
+#| label: exp-smoother
+#| fig-height: 11
+
+# --- Trend Estimation & Residuals
+m.exp  <- smooth.exp(wine, alpha = 0.2)
+rm.exp <- wine - m.exp
+
+# --- Plotting
+par(mfrow = c(2,1))    # Matrix of plots: 2 rows, 1 column
+
+# Estimated m_t
+plot.wine(); mtext("Exponential Smoother:  a = 0.2")
+lines(m.exp, col = "green3")
+
+# Residuals from m_t
+plot.ts(rm.exp,
+        main = "Happy Wine Residuals",
+        ylab = "Residual Value",
+        xaxt = 'n')
+axis.wine(); mtext("Exponential Smoother:  a = 0.2")
+abline(h = 0, lty = 2) # 
+```
+
+# Extract $\mathbf{s_t:}$ The Spring
+
+We apply this not to the original data, but to the residuals we got when we removed the trend. Just like how we can't remove the spring from a pen without opening up the pen. Let's use the residuals from our exponential smoother.
+
+#### Harmonic Regression
+
+We suspect there is a seasonal component of period $d = 12$. Let's model this, and plot it over our exponential smoother residuals. Are there other periods that might be relevant?
+
+```{r}
+#| label: harmonic
+
+s.hr <- hr(rm.exp, d = c(4,12))  # Seasonal Component
+
+```
+
+#### The S1 Method
+
+Let's do the same thing using the `season()` function from ITSMR. Again, we choose $d = 12$.
+
+```{r}
+#| label: S1
+
+s.s1 <- season(rm.ma, d = 12)   # Seasonal Component
+
+```
+
+#### Plotting
+
+```{r}
+#| label: s_plotting
+#| fig-height: 11
+
+par(mfrow = c(2,1)) # Matrix of plots: 2 rows, 1 column
+
+# Estimated s_t: Harmonic Regression
+plot.ts(rm.exp,
+        main = "Happy Wine | Exponential Smoother Residuals",
+        ylab = "Residual Value",
+        xaxt = 'n')
+axis.wine(); mtext("Harmonic Regression:  d = 4,12")
+lines(s.hr, col = "deepskyblue3", lwd = 2)
+
+# Estimated s_t: S1 Method
+plot.ts(rm.ma,
+        main = "Happy Wine | MA Smoother Residuals",
+        ylab = "Residual Value",
+        xaxt = 'n')
+axis.wine(); mtext("S1 method:  q = 12", lwd = 2)
+lines(s.s1, col = "chocolate")
+```
+
+# Examine $\mathbf{Y_t:}$ The Residual Ink
+
+#### Get residuals
+
+```{r}
+y.hr <- rm.exp - s.hr          # Harmonic Regression Residuals
+y.s1 <- rm.ma - s.s1           # S1 Residuals
+```
+
+#### Plot residuals
+
+```{r}
+#| label: y_plotting
+#| fig-height: 6
+par(mfrow = c(2,1), mar = c(4,4,3.5,1))
+
+# Residuals from s_t: harmonic regression
+plot.ts(y.hr,
+        main = "Happy Wine Residuals | deseasonalized",
+        ylab = "Residual Value",
+        xaxt = 'n')
+axis.wine(); mtext("Harmonic Regression:  d = 4,12"); abline(h = 0, lty = 2)
+
+# Residuals from s_t: S1 method
+plot.ts(y.s1,
+        main = "Happy Wine Residuals | deseasonalized",
+        ylab = "Residual Value",
+        xaxt = 'n')
+axis.wine(); mtext("S1 method:  q = 12"); abline(h = 0, lty = 2) 
+```
+
+#### Autocorrelation
+
+Basically, it describes the correlation between any two points in the series, as a function of the time-distance between those two points. Noise, by definition, has no such correlation across time.
+
+We want our residuals $\hat Y_t$ to be *noisy.* We want our pen's ink to be *inky.*
+
+```{r}
+#| label: ACFs
+#| fig-height: 3.5
+
+par(mfrow = c(1,2), mar = c(4,4,3,1)) # some optional plotting parameters <3
+
+acf(y.hr,
+    main = "ACF of deseasonalized residuals")
+mtext("Harmonic Regression:  d = 4, 12")
+
+acf(y.s1,
+    main = "ACF of deseasonalized residuals")
+mtext("S1 method:  q = 12")
+```
+
+Values exceeding the dashed blue lines indicate significant autocorrelation.
+
+These ACFs suggest that the residuals left by the season fit are less correlated across time than those we obtained via harmonic regression. Thus the season fit is preferred.
+
+\newpage
+
+# Putting the pen back together
+
+```{r}
+#| label: Frankenseries
+#| fig-height: 4
+
+x.frankenseries   <- m.ma + s.s1
+
+plot.wine(); mtext("Reconstructed Series")
+lines(x.frankenseries, col = "magenta2", lwd = 2)
+```
