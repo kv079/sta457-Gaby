@@ -157,7 +157,9 @@ cat("Estimated sigma^2:     ", round(sigma2, 4), "\n")
 
 # --- Specify model using workshop function and forecast ---
 arma.model <- specify(ar = phi1, ma = theta1, sigma2 = sigma2)
-fc <- itsmr::forecast(resid, a = arma.model, h = h)
+# itsmr::forecast() signature: forecast(x, M, a, h, alpha)
+# M is the process mean; residuals are zero-mean after detrending
+fc <- itsmr::forecast(resid, M = 0, a = arma.model, h = h)
 
 # --- Reconstruct temperature forecast (add back trend + seasonality) ---
 temp.pred  <- as.numeric(m.new) + as.numeric(s.new) + fc$pred
