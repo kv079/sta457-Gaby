@@ -1,0 +1,367 @@
+---
+title: "Homework 3"
+subtitle: |
+    | STA457/2202 — Winter 2026
+    | Time Series Analysis
+format:
+  pdf:
+    fig-width: 8.5
+---
+
+## Setup
+
+```{r setup}
+#| warning: false
+#| message: false
+library(itsmr)
+library(knitr)
+```
+
+---
+
+# Problem 1
+
+## Part 1: Create the Time Series (May 1–7, 2003)
+
+```{r p1-ts}
+toronto <- read.csv("Toronto_heat .csv")
+
+# Extract hourly temperatures for May 1 (00:00) to May 7 (23:00)
+may17  <- toronto[toronto$Month == 5 & toronto$Day %in% 1:7,  "Temp"]
+n      <- length(may17)   # 168 observations (7 days × 24 hours)
+
+head(may17)
+```
+
+## Part 2: Forecast Using ARMA(1,1) via `forecast()`
+
+We decompose the series by removing a quadratic trend and a seasonal component
+with period $d = 24$ hours, then fit ARMA(1,1) to the residuals and forecast
+24 steps ahead using `forecast()` from `itsmr`.
+
+```{r p1-forecast}
+# --- Step 1: Remove quadratic trend (p = 2)  [itsmr: trend()]
+m.trend <- trend(may17, p = 2)
+
+# Also fit lm() to extrapolate the trend beyond the observed data
+t.vec    <- 1:n
+m.fit    <- lm(may17 ~ t.vec + I(t.vec^2))
+
+# --- Step 2: Remove seasonal component, period = 24 hours  [itsmr: season()]
+resid.m  <- may17 - m.trend
+s.season <- season(resid.m, d = 24)
+
+# --- Step 3: ARMA residuals
+y.resid <- may17 - m.trend - s.season
+
+# --- Step 4: Fit ARMA(1,1) to residuals, then specify model  [itsmr: specify()]
+fit.arma <- arima(y.resid, order = c(1, 0, 1), include.mean = FALSE)
+model    <- specify(ar     = fit.arma$coef["ar1"],
+                    ma     = fit.arma$coef["ma1"],
+                    sigma2 = fit.arma$sigma2)
+
+kable(t(as.data.frame(model)), caption = "ARMA(1,1) Model Parameters")
+
+# --- Step 5: Forecast 24 hours ahead (manual ARMA(1,1) h-step prediction)
+h     <- 24
+phi   <- as.numeric(fit.arma$coef["ar1"])
+theta <- as.numeric(fit.arma$coef["ma1"])
+sig2  <- fit.arma$sigma2
+innov <- as.numeric(residuals(fit.arma))
+
+# 1-step: E[X_{n+1}|X_1,...,X_n] = phi*X_n + theta*Z_n
+fc1 <- phi * tail(y.resid, 1) + theta * tail(innov, 1)
+
+# h-step (h>=2): MA term vanishes, forecast = phi^(h-1) * fc1
+fc.mean <- c(fc1, phi^(1:(h - 1)) * fc1)
+
+# 95% prediction intervals via psi-weights:
+#   psi_0 = 1,  psi_j = (phi + theta) * phi^(j-1) for j >= 1
+psi   <- c(1, (phi + theta) * phi^(0:(h - 2)))
+fc.se <- sqrt(cumsum(psi^2) * sig2)
+
+# --- Step 6: Reconstruct full temperature forecast
+t.future <- (n + 1):(n + 24)
+m.future <- predict(m.fit, newdata = data.frame(t.vec = t.future))
+s.future <- s.season[1:24]
+
+pred.temp  <- fc.mean + m.future + s.future
+pred.lower <- (fc.mean - 1.96 * fc.se) + m.future + s.future
+pred.upper <- (fc.mean + 1.96 * fc.se) + m.future + s.future
+```
+
+---
+
+# Problem 2
+
+```{r p2-plot}
+#| fig-height: 5
+
+# Actual May 8 temperatures (00:00 – 23:00)
+may8   <- toronto[toronto$Month == 5 & toronto$Day == 8, "Temp"]
+x.hist <- 1:n
+x.pred <- (n + 1):(n + 24)
+
+# y-axis range covering all series
+ylim.range <- range(c(may17, pred.temp, pred.lower, pred.upper, may8))
+
+# x-axis: one tick per day at midnight
+day.ticks  <- seq(1, n + 24, by = 24)
+day.labels <- paste0("May ", 1:9)
+
+par(mar = c(5, 4, 4, 2))
+
+# 1. Historical data: May 1–7
+plot(x.hist, may17,
+     type = "l",
+     xlim = c(1, n + 24),
+     ylim = ylim.range,
+     main = "Toronto Hourly Temperature: May 1–8, 2003",
+     xlab = "Date",
+     ylab = "Temperature (°C)",
+     xaxt = "n",
+     col  = "black",
+     lwd  = 1.5)
+
+axis(1, at = day.ticks, labels = day.labels[seq_along(day.ticks)], las = 2)
+abline(v = n + 0.5, lty = 3, col = "grey60")   # forecast start marker
+
+# 2. Predicted values for May 8
+lines(x.pred, pred.temp, col = "blue", lwd = 1.5)
+
+# 3. Upper and lower 95% confidence bands (dashed, lty = 2)
+lines(x.pred, pred.upper, col = "blue", lty = 2)
+lines(x.pred, pred.lower, col = "blue", lty = 2)
+
+# 4. Actual May 8 temperatures (dashed)
+lines(x.pred, may8, col = "red", lty = 2, lwd = 1.5)
+
+legend("topleft",
+       legend = c("May 1–7 (observed)",
+                  "May 8 (ARMA(1,1) forecast)",
+                  "95% confidence band",
+                  "May 8 (actual)"),
+       col  = c("black", "blue", "blue", "red"),
+       lty  = c(1, 1, 2, 2),
+       lwd  = c(1.5, 1.5, 1, 1.5),
+       cex  = 0.8)
+```
+
+**Commentary:** The ARMA(1,1) forecast captures the broad shape of May 8th's
+temperature, including the overnight low and afternoon rise, thanks to the
+quadratic trend and 24-hour seasonal component we removed. The actual values
+mostly fall within the 95% confidence band for the first half of the day,
+but the model underestimates the afternoon peak, which suggests some
+day-to-day variability that cannot be fully captured by a simple ARMA(1,1)
+residual model.
+
+---
+
+# Problem 3
+
+Let $A_1, A_2$ be uncorrelated, zero-mean RVs with unit variance, and let
+$\omega \in [0,\pi]$ be a fixed frequency. Define
+$$
+X_t = A_1\cos(\omega t) + A_2\sin(\omega t), \qquad t = 0, \pm 1, \ldots
+$$
+
+**Find $P_2 X_3$ and its mean squared error.**
+
+**Step 1 — Autocovariance function.**
+
+$$
+\gamma(h) = \mathrm{Cov}(X_t, X_{t+h})
+= \cos(\omega h)
+$$
+
+because $\mathrm{Var}(A_1) = \mathrm{Var}(A_2) = 1$ and $A_1 \perp A_2$.
+In particular $\gamma(0) = 1$.
+
+**Step 2 — Normal equations for $P_2 X_3 = a_1 X_1 + a_2 X_2$.**
+
+$$
+\begin{pmatrix} \gamma(0) & \gamma(1) \\ \gamma(1) & \gamma(0) \end{pmatrix}
+\begin{pmatrix} a_1 \\ a_2 \end{pmatrix}
+=
+\begin{pmatrix} \mathrm{Cov}(X_1, X_3) \\ \mathrm{Cov}(X_2, X_3) \end{pmatrix}
+=
+\begin{pmatrix} \gamma(2) \\ \gamma(1) \end{pmatrix}
+$$
+
+$$
+\begin{pmatrix} 1 & \cos\omega \\ \cos\omega & 1 \end{pmatrix}
+\begin{pmatrix} a_1 \\ a_2 \end{pmatrix}
+=
+\begin{pmatrix} \cos(2\omega) \\ \cos(\omega) \end{pmatrix}
+$$
+
+**Step 3 — Solve.** Let $c = \cos\omega$.
+
+From the second equation: $a_2 = c - c\,a_1$.
+Substituting into the first:
+
+$$
+a_1 + c(c - c\,a_1) = 2c^2 - 1
+\;\Longrightarrow\;
+a_1(1 - c^2) = -(1 - c^2)
+\;\Longrightarrow\;
+a_1 = -1
+$$
+
+Then $a_2 = c + c = 2\cos\omega$.
+
+$$
+\boxed{P_2 X_3 = 2\cos(\omega)\,X_2 - X_1}
+$$
+
+**Step 4 — MSE.**
+
+$$
+\mathrm{MSE} = \gamma(0) - \bigl(a_1\,\gamma(2) + a_2\,\gamma(1)\bigr)
+= 1 - \bigl(-\cos(2\omega) + 2\cos^2\omega\bigr)
+= 1 - 1 = \boxed{0}
+$$
+
+The MSE is **zero**: $X_t$ satisfies the exact recurrence
+$X_t = 2\cos(\omega)\,X_{t-1} - X_{t-2}$, so it can be predicted perfectly
+from two past values.
+
+---
+
+# Problem 4
+
+Let $X_1, X_2, X_4, X_5$ be taken from the MA(1) model
+$$
+X_t = Z_t + \theta Z_{t-1}, \qquad \{Z_t\} \sim wn(0,\sigma^2).
+$$
+
+### Part a)
+
+**Find $P(X_3 \mid X_4, X_5)$: the best linear predictor of $X_3$ in terms
+of $X_4$ and $X_5$.**
+
+The autocovariance function of MA(1) is
+$$
+\gamma(0) = \sigma^2(1+\theta^2),\quad
+\gamma(1) = \sigma^2\theta,\quad
+\gamma(h) = 0 \text{ for } |h| \geq 2.
+$$
+
+Write $P(X_3 \mid X_4, X_5) = a_4 X_4 + a_5 X_5$.
+The normal equations are:
+$$
+\begin{pmatrix}\gamma(0) & \gamma(1)\\\gamma(1) & \gamma(0)\end{pmatrix}
+\begin{pmatrix}a_4\\a_5\end{pmatrix}
+=
+\begin{pmatrix}\mathrm{Cov}(X_4,X_3)\\\mathrm{Cov}(X_5,X_3)\end{pmatrix}
+=
+\begin{pmatrix}\gamma(1)\\\gamma(2)\end{pmatrix}
+=
+\begin{pmatrix}\sigma^2\theta\\0\end{pmatrix}.
+$$
+
+From the second equation:
+$$
+a_4 = -\frac{(1+\theta^2)}{\theta}\,a_5.
+$$
+
+Substituting into the first and simplifying:
+$$
+a_5\cdot\frac{-(1+\theta^2)^2 + \theta^2}{\theta} = \theta
+\;\Longrightarrow\;
+a_5 = \frac{-\theta^2}{1+\theta^2+\theta^4}.
+$$
+
+Then:
+$$
+a_4 = \frac{\theta(1+\theta^2)}{1+\theta^2+\theta^4}.
+$$
+
+$$
+\boxed{
+P(X_3 \mid X_4, X_5)
+= \frac{\theta(1+\theta^2)}{1+\theta^2+\theta^4}\,X_4
+  - \frac{\theta^2}{1+\theta^2+\theta^4}\,X_5
+}
+$$
+
+### Part b)
+
+**Find the MSE of the predictor from Part a).**
+
+$$
+\mathrm{MSE}
+= \gamma(0) - \bigl(a_4\,\gamma(1) + a_5\cdot 0\bigr)
+= \sigma^2(1+\theta^2) - \frac{\theta(1+\theta^2)}{1+\theta^2+\theta^4}\cdot\sigma^2\theta
+$$
+
+$$
+= \sigma^2(1+\theta^2)\left(1 - \frac{\theta^2}{1+\theta^2+\theta^4}\right)
+= \sigma^2(1+\theta^2)\cdot\frac{1+\theta^4}{1+\theta^2+\theta^4}
+$$
+
+$$
+\boxed{
+\mathrm{MSE}
+= \frac{\sigma^2(1+\theta^2)(1+\theta^4)}{1+\theta^2+\theta^4}
+}
+$$
+
+---
+
+# Problem 5 — Graduate Students Only
+
+Let $\{Y_t\}$ be the ARMA(1,1) process:
+$$
+Y_t - \tfrac{1}{2}Y_{t-1} = W_t + \tfrac{1}{2}W_{t-1}, \qquad
+W_t \sim wn(0,\sigma^2).
+$$
+So $\phi = \tfrac{1}{2}$, $\theta = \tfrac{1}{2}$.
+
+**Autocovariance (textbook p. 78 formula):**
+
+$$
+\gamma(0)
+= \frac{\sigma^2\bigl(1 + 2\phi\theta + \theta^2\bigr)}{1-\phi^2}
+= \frac{\sigma^2\bigl(1 + \tfrac{1}{2} + \tfrac{1}{4}\bigr)}{\tfrac{3}{4}}
+= \frac{\tfrac{7}{4}\sigma^2}{\tfrac{3}{4}}
+= \frac{7\sigma^2}{3}
+$$
+
+$$
+\gamma(1)
+= \frac{(\phi+\theta)(1+\phi\theta)\,\sigma^2}{1-\phi^2}
+= \frac{1\cdot\tfrac{5}{4}\,\sigma^2}{\tfrac{3}{4}}
+= \frac{5\sigma^2}{3}
+$$
+
+### Part a)
+
+**Find $P(Y_2 \mid Y_1)$.**
+
+Since we are predicting one step ahead from a single observation:
+$$
+P(Y_2 \mid Y_1) = \frac{\gamma(1)}{\gamma(0)}\,Y_1
+= \frac{5\sigma^2/3}{7\sigma^2/3}\,Y_1
+= \frac{5}{7}\,Y_1
+$$
+
+$$
+\boxed{P(Y_2 \mid Y_1) = \tfrac{5}{7}\,Y_1}
+$$
+
+### Part b)
+
+**Compute the MSE of $P(Y_2 \mid Y_1)$.**
+
+$$
+\mathrm{MSE}
+= \gamma(0) - \frac{[\gamma(1)]^2}{\gamma(0)}
+= \frac{7\sigma^2}{3} - \frac{(5\sigma^2/3)^2}{7\sigma^2/3}
+= \frac{7\sigma^2}{3} - \frac{25\sigma^2}{21}
+= \frac{49\sigma^2 - 25\sigma^2}{21}
+$$
+
+$$
+\boxed{\mathrm{MSE} = \frac{24\sigma^2}{21} = \frac{8\sigma^2}{7}}
+$$
