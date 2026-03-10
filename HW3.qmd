@@ -1,0 +1,293 @@
+---
+title: "Homework 3"
+subtitle: |
+    | STA457/2202 - Winter 2026
+    | Time Series Analysis | University of Toronto
+    | Deadline: Friday, March 13th, 23:59
+format:
+  pdf:
+    fig-width: 8.5
+    fig-height: 5
+---
+
+# Setup
+
+```{r setup}
+#| warning: false
+#| message: false
+library(itsmr)
+```
+
+---
+
+# Problem 1
+
+## Part 1: Create the Time Series (May 1–7, 2003)
+
+```{r p1-ts}
+toronto <- read.csv("Toronto_heat .csv")
+
+# Filter May 2003
+may_data <- toronto[toronto$Year == 2003 & toronto$Month == 5, ]
+
+# May 1–7: 7 days × 24 hours = 168 observations
+may1to7 <- may_data[may_data$Day <= 7, "Temp"]
+x <- ts(may1to7, frequency = 24)
+n <- length(x)  # 168
+```
+
+## Part 2: Forecast Next 24 Hours via ARMA(1,1) with Trend + Seasonality
+
+The model accounts for a **quadratic trend** and a **seasonal component** with period 24, with an ARMA(1,1) fitted to the residuals.
+
+```{r p1-forecast}
+# --- Step 1: Remove quadratic trend ---
+t_idx <- 1:n
+lm_trend <- lm(x ~ t_idx + I(t_idx^2))
+m_fit <- fitted(lm_trend)
+x_detrend <- x - m_fit
+
+# --- Step 2: Remove seasonal component (period = 24 hours) ---
+s_fit <- season(x_detrend, d = 24)
+x_resid <- x_detrend - s_fit
+
+# --- Step 3: Estimate ARMA(1,1) on residuals ---
+M0 <- specify(ar = c(0.1), ma = c(0.1), sigma2 = var(x_resid))
+M_est <- estimate(x_resid, M0)
+
+# --- Step 4: Forecast 24 steps ahead ---
+fc <- forecast(x_resid, M_est, h = 24)
+
+# --- Step 5: Reconstruct predictions by adding back trend + seasonality ---
+t_future <- (n + 1):(n + 24)
+
+# Extrapolate quadratic trend
+coefs <- coef(lm_trend)
+m_future <- coefs[1] + coefs[2] * t_future + coefs[3] * t_future^2
+
+# Seasonal pattern repeats with period 24
+s_future <- s_fit[((t_future - 1) %% 24) + 1]
+
+# Final forecast + confidence bands (±1.96 SE)
+fc_pred  <- fc$pred + m_future + s_future
+fc_upper <- fc$pred + 1.96 * fc$se + m_future + s_future
+fc_lower <- fc$pred - 1.96 * fc$se + m_future + s_future
+```
+
+---
+
+# Problem 2
+
+```{r p2-plot}
+# Actual May 8 data (for comparison)
+may8 <- may_data[may_data$Day == 8, "Temp"]
+
+y_range <- range(c(as.numeric(x), fc_upper, fc_lower, may8), na.rm = TRUE)
+
+# Day-tick positions: one per day (every 24 obs)
+day_ticks  <- seq(1, n + 24, by = 24)
+day_labels <- paste("May", 1:8)
+
+plot(1:n, as.numeric(x),
+     type = "l", col = "black",
+     xlim = c(1, n + 24), ylim = y_range,
+     main = "Toronto Hourly Temperature: May 1–7 Observed + May 8 Forecast",
+     xlab = "Date (2003)",
+     ylab = "Temperature (°C)",
+     xaxt = "n")
+
+# X-axis with day labels
+axis(1, at = day_ticks, labels = day_labels, las = 2)
+
+# Forecast (May 8 predicted)
+lines(t_future, fc_pred, col = "blue", lwd = 1.5)
+
+# 95% confidence bands
+lines(t_future, fc_upper, col = "blue", lty = 2, lwd = 1.2)
+lines(t_future, fc_lower, col = "blue", lty = 2, lwd = 1.2)
+
+# Actual May 8 temperature
+lines(t_future, may8, col = "red", lty = 2, lwd = 1.5)
+
+legend("topleft",
+       legend = c("Observed (May 1–7)", "Forecast (May 8)",
+                  "95% CI", "Actual (May 8)"),
+       col  = c("black", "blue", "blue", "red"),
+       lty  = c(1, 1, 2, 2),
+       lwd  = c(1, 1.5, 1.2, 1.5),
+       cex  = 0.75, bg = "white")
+```
+
+**Commentary:** The ARMA(1,1) model with quadratic trend and 24-hour seasonality captures the daily temperature cycle reasonably well. The confidence bands widen over the 24-hour horizon as uncertainty accumulates. The actual May 8 temperatures (dashed red) fall mostly within the 95% confidence interval, suggesting the model produces a reasonable short-term forecast, though the exact magnitude may drift given that only one week of data was used for estimation.
+
+---
+
+# Problem 3
+
+**Setup.** Let $A_1, A_2$ be uncorrelated, zero-mean RVs with unit variance, and let $\omega \in [0, \pi]$ be fixed. Define
+$$
+X_t = A_1\cos(\omega t) + A_2\sin(\omega t), \qquad t = 0, \pm 1, \ldots
+$$
+
+**Autocovariance.** Since $A_1, A_2$ are uncorrelated with $\operatorname{Var}(A_i)=1$:
+$$
+\gamma(h) = \operatorname{Cov}(X_t, X_{t+h})
+= \cos(\omega t)\cos(\omega(t+h)) + \sin(\omega t)\sin(\omega(t+h))
+= \cos(\omega h).
+$$
+
+**Find $P_2 X_3$.**
+
+The BLP is $P_2 X_3 = a_1 X_1 + a_2 X_2$ where $\mathbf{a} = \Gamma_2^{-1}\,\mathbf{c}$, with
+$$
+\Gamma_2 = \begin{pmatrix} \gamma(0) & \gamma(1) \\ \gamma(1) & \gamma(0) \end{pmatrix}
+= \begin{pmatrix} 1 & \cos\omega \\ \cos\omega & 1 \end{pmatrix},
+\qquad
+\mathbf{c} = \begin{pmatrix} \operatorname{Cov}(X_3, X_1) \\ \operatorname{Cov}(X_3, X_2) \end{pmatrix}
+= \begin{pmatrix} \cos(2\omega) \\ \cos(\omega) \end{pmatrix}.
+$$
+
+The determinant is $\det(\Gamma_2) = 1 - \cos^2\omega = \sin^2\omega$, so
+$$
+\Gamma_2^{-1} = \frac{1}{\sin^2\omega}\begin{pmatrix} 1 & -\cos\omega \\ -\cos\omega & 1 \end{pmatrix}.
+$$
+
+**Coefficient $a_1$:**
+$$
+a_1 = \frac{\cos(2\omega) - \cos^2\omega}{\sin^2\omega}.
+$$
+Using $\cos(2\omega) = 2\cos^2\omega - 1$:
+$$
+\cos(2\omega) - \cos^2\omega = \cos^2\omega - 1 = -\sin^2\omega
+\implies a_1 = -1.
+$$
+
+**Coefficient $a_2$:**
+$$
+a_2 = \frac{-\cos\omega\,\cos(2\omega) + \cos\omega}{\sin^2\omega}
+= \frac{\cos\omega\,(1 - \cos(2\omega))}{\sin^2\omega}
+= \frac{\cos\omega \cdot 2\sin^2\omega}{\sin^2\omega} = 2\cos\omega.
+$$
+
+Therefore:
+$$
+\boxed{P_2 X_3 = -X_1 + 2\cos(\omega)\, X_2.}
+$$
+
+**MSE:**
+$$
+\operatorname{MSE}(P_2 X_3) = \gamma(0) - \mathbf{c}^\top \mathbf{a}
+= 1 - \bigl[\cos(2\omega)\cdot(-1) + \cos(\omega)\cdot 2\cos(\omega)\bigr]
+= 1 + \cos(2\omega) - 2\cos^2\omega.
+$$
+Since $\cos(2\omega) = 2\cos^2\omega - 1$:
+$$
+\operatorname{MSE}(P_2 X_3) = 1 + (2\cos^2\omega - 1) - 2\cos^2\omega = \boxed{0}.
+$$
+
+**Interpretation.** The MSE is zero: knowing $X_1$ and $X_2$ determines $X_3$ exactly. This is because the process $X_t$ has only two free parameters ($A_1$ and $A_2$), so any two observations (at distinct times with $\omega \ne 0, \pi$) completely determine all future values.
+
+---
+
+# Problem 4
+
+**Model.** $X_t = Z_t + \theta Z_{t-1}$, $\{Z_t\} \sim \mathrm{wn}(0,\sigma^2)$. The autocovariances are:
+$$
+\gamma(0) = (1+\theta^2)\sigma^2, \quad \gamma(1) = \theta\sigma^2, \quad \gamma(h) = 0 \text{ for } |h| \ge 2.
+$$
+
+## Part a) Find $P(X_3 \mid X_4, X_5)$
+
+The BLP is $P(X_3 \mid X_4, X_5) = a_1 X_4 + a_2 X_5$ where $\mathbf{a} = \Gamma^{-1}\mathbf{c}$:
+
+$$
+\Gamma = \begin{pmatrix} \gamma(0) & \gamma(1) \\ \gamma(1) & \gamma(0) \end{pmatrix}
+= \sigma^2\begin{pmatrix} 1+\theta^2 & \theta \\ \theta & 1+\theta^2 \end{pmatrix},
+\qquad
+\mathbf{c} = \begin{pmatrix} \operatorname{Cov}(X_3, X_4) \\ \operatorname{Cov}(X_3, X_5) \end{pmatrix}
+= \begin{pmatrix} \theta\sigma^2 \\ 0 \end{pmatrix}.
+$$
+
+The determinant: $\det(\Gamma) = \sigma^4\bigl[(1+\theta^2)^2 - \theta^2\bigr] = \sigma^4(1 + \theta^2 + \theta^4)$.
+
+$$
+\Gamma^{-1} = \frac{1}{\sigma^2(1+\theta^2+\theta^4)}\begin{pmatrix} 1+\theta^2 & -\theta \\ -\theta & 1+\theta^2 \end{pmatrix}.
+$$
+
+$$
+\mathbf{a} = \Gamma^{-1}\mathbf{c}
+= \frac{1}{1+\theta^2+\theta^4}\begin{pmatrix} \theta(1+\theta^2) \\ -\theta^2 \end{pmatrix}.
+$$
+
+Therefore:
+$$
+\boxed{P(X_3 \mid X_4, X_5) = \frac{\theta(1+\theta^2)}{1+\theta^2+\theta^4}\,X_4
+\;-\; \frac{\theta^2}{1+\theta^2+\theta^4}\,X_5.}
+$$
+
+## Part b) MSE of the Linear Predictor
+
+$$
+\operatorname{MSE} = \gamma(0) - \mathbf{c}^\top\mathbf{a}
+= (1+\theta^2)\sigma^2 - \theta\sigma^2 \cdot \frac{\theta(1+\theta^2)}{1+\theta^2+\theta^4}.
+$$
+
+$$
+= (1+\theta^2)\sigma^2\left[1 - \frac{\theta^2}{1+\theta^2+\theta^4}\right]
+= (1+\theta^2)\sigma^2 \cdot \frac{1+\theta^4}{1+\theta^2+\theta^4}.
+$$
+
+$$
+\boxed{\operatorname{MSE}\bigl(P(X_3\mid X_4,X_5)\bigr) = \frac{(1+\theta^2)(1+\theta^4)}{1+\theta^2+\theta^4}\,\sigma^2.}
+$$
+
+---
+
+# Problem 5 — Graduate Students Only
+
+**Model.** The ARMA(1,1) process:
+$$
+Y_t - \tfrac{1}{2}Y_{t-1} = W_t + \tfrac{1}{2}W_{t-1}, \qquad W_t \sim \mathrm{wn}(0,\sigma^2).
+$$
+So $\phi = \tfrac{1}{2}$, $\theta = \tfrac{1}{2}$.
+
+**Autocovariances (textbook p.78).** For ARMA(1,1) with parameters $\phi, \theta$:
+
+$$
+\gamma(0) = \sigma^2\,\frac{1 + 2\phi\theta + \theta^2}{1-\phi^2}, \qquad
+\gamma(1) = \sigma^2\,\frac{(\phi+\theta)(1+\phi\theta)}{1-\phi^2}, \qquad
+\gamma(h) = \phi^{h-1}\gamma(1),\; h\ge 2.
+$$
+
+Substituting $\phi = \theta = \tfrac{1}{2}$:
+
+$$
+\gamma(0) = \sigma^2\,\frac{1 + 2\cdot\frac{1}{4} + \frac{1}{4}}{1 - \frac{1}{4}}
+= \sigma^2\,\frac{\frac{7}{4}}{\frac{3}{4}} = \frac{7\sigma^2}{3},
+$$
+
+$$
+\gamma(1) = \sigma^2\,\frac{\bigl(\frac{1}{2}+\frac{1}{2}\bigr)\bigl(1+\frac{1}{4}\bigr)}{\frac{3}{4}}
+= \sigma^2\,\frac{1 \cdot \frac{5}{4}}{\frac{3}{4}} = \frac{5\sigma^2}{3}.
+$$
+
+## Part a) Find $P(Y_2 \mid Y_1)$
+
+The BLP of $Y_2$ given $Y_1$ is:
+$$
+P(Y_2 \mid Y_1) = \frac{\gamma(1)}{\gamma(0)}\,Y_1 = \frac{5\sigma^2/3}{7\sigma^2/3}\,Y_1
+= \boxed{\frac{5}{7}\,Y_1.}
+$$
+
+## Part b) Compute $\operatorname{MSE}\bigl(P(Y_2 \mid Y_1)\bigr)$
+
+$$
+\operatorname{MSE} = \gamma(0) - \frac{[\gamma(1)]^2}{\gamma(0)}
+= \frac{7\sigma^2}{3} - \frac{(5\sigma^2/3)^2}{7\sigma^2/3}
+= \frac{7\sigma^2}{3} - \frac{25\sigma^2}{9} \cdot \frac{3}{7\sigma^2}\cdot\sigma^2.
+$$
+
+$$
+= \frac{7\sigma^2}{3} - \frac{25\sigma^2}{21}
+= \frac{49\sigma^2 - 25\sigma^2}{21} = \boxed{\frac{8\sigma^2}{7}.}
+$$
