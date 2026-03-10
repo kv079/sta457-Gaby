@@ -1,0 +1,437 @@
+---
+title: "Homework 3"
+subtitle: |
+    | STA457/2202 - Winter 2026
+    | Time Series Analysis
+    | Skye P. Griffith, University of Toronto
+format:
+  pdf:
+    fig-width: 8.5
+---
+
+# Setup
+
+```{r}
+#| label: setup
+#| warning: false
+#| message: false
+
+library(itsmr)
+library(knitr)
+```
+
+---
+
+# Problem 1
+
+| **Info**       | **Description**                                     |
+|:---------------|:----------------------------------------------------|
+| **Data**       | Hourly Toronto Temperature                          |
+| **Times Sampled** | May 1, 2003 (00:00) − May 7, 2003 (23:00)       |
+
+## Part 1: Create the Time Series
+
+```{r}
+#| label: load-data
+#| warning: false
+
+toronto <- read.csv("Toronto_heat .csv")
+
+# Filter to May 2003
+may.2003 <- toronto[toronto$Year == 2003 & toronto$Month == 5, ]
+
+# Training data: May 1-7 (168 hourly observations)
+train <- may.2003[may.2003$Day >= 1 & may.2003$Day <= 7, ]
+
+# Test data: May 8 (24 hourly observations — actual values for comparison)
+test  <- may.2003[may.2003$Day == 8, ]
+
+temp      <- ts(train$Temp)   # hourly time series, May 1–7
+temp.may8 <- test$Temp        # actual May 8 temperatures
+
+n <- length(temp)   # should be 168
+h <- 24             # forecast horizon (24 hours)
+
+cat("Training observations:", n, "\n")
+cat("Forecast horizon:     ", h, "\n")
+```
+
+```{r}
+#| label: plot-train
+#| fig-height: 4
+
+# Daily tick marks for the x-axis (one tick per day = every 24 observations)
+day.ticks  <- 24*(0:6) + 1
+day.labels <- paste("May", 1:7)
+
+plot.ts(temp,
+        main = "Hourly Toronto Temperature: May 1–7, 2003",
+        xlab = "Date (May 2003)",
+        ylab = "Temperature (°C)",
+        xaxt = 'n')
+axis(side = 1, at = day.ticks, labels = day.labels, las = 1)
+```
+
+## Part 2: ARMA(1,1) Forecast
+
+The forecast is based on three steps:
+
+1. Remove the **quadratic trend** ($p = 2$)
+2. Remove the **seasonal component** with period $d = 24$ hours
+3. Fit an **ARMA(1,1)** model to the residuals and forecast 24 steps ahead
+
+### Step 1 — Quadratic Trend
+
+```{r}
+#| label: trend-removal
+
+# --- Fit quadratic trend using workshop function ---
+m.fitted <- trend(temp, p = 2)
+rm.trend <- as.numeric(temp) - m.fitted
+
+# --- Also fit via lm() for extrapolation to May 8 ---
+t.vec   <- 1:n
+quad.lm <- lm(as.numeric(temp) ~ t.vec + I(t.vec^2))
+t.new   <- (n+1):(n+h)
+m.new   <- as.numeric(predict(quad.lm,
+             newdata = data.frame(t.vec = t.new)))
+```
+
+```{r}
+#| label: plot-trend
+#| fig-height: 4
+
+plot.ts(temp,
+        main = "Quadratic Trend: May 1–7, 2003",
+        xlab = "Date (May 2003)",
+        ylab = "Temperature (°C)",
+        xaxt = 'n')
+axis(side = 1, at = day.ticks, labels = day.labels, las = 1)
+lines(m.fitted, col = "blue", lwd = 2)
+legend("topright", legend = c("Observed", "Quadratic Trend"),
+       col = c("black","blue"), lty = 1, bty = "n")
+```
+
+### Step 2 — Seasonal Component ($d = 24$)
+
+```{r}
+#| label: seasonal-removal
+
+# --- Harmonic regression seasonal component, period = 24 hours ---
+s.fitted <- hr(rm.trend, d = 24)
+resid    <- rm.trend - s.fitted
+
+# --- Extrapolate seasonality to May 8 ---
+# Since n = 168 = 7 × 24, time points 169–192 repeat the same
+# phase as time points 1–24.
+s.new <- s.fitted[1:h]
+```
+
+```{r}
+#| label: plot-residuals
+#| fig-height: 4
+
+plot.ts(resid,
+        main = "Residuals After Trend and Seasonal Removal",
+        xlab = "Date (May 2003)",
+        ylab = "Residual (°C)",
+        xaxt = 'n')
+axis(side = 1, at = day.ticks, labels = day.labels, las = 1)
+abline(h = 0, lty = 2)
+```
+
+### Step 3 — ARMA(1,1) Estimation and Forecasting
+
+```{r}
+#| label: arma-forecast
+
+# --- Estimate ARMA(1,1) parameters from the residuals ---
+arma.est <- arima(resid, order = c(1, 0, 1), include.mean = FALSE)
+phi1   <- as.numeric(coef(arma.est)["ar1"])
+theta1 <- as.numeric(coef(arma.est)["ma1"])
+sigma2 <- arma.est$sigma2
+
+cat("Estimated phi_1  (AR):", round(phi1,   4), "\n")
+cat("Estimated theta_1 (MA):", round(theta1, 4), "\n")
+cat("Estimated sigma^2:     ", round(sigma2, 4), "\n")
+
+# --- Specify model using workshop function and forecast ---
+arma.model <- specify(ar = phi1, ma = theta1, sigma2 = sigma2)
+fc <- itsmr::forecast(resid, a = arma.model, h = h)
+
+# --- Reconstruct temperature forecast (add back trend + seasonality) ---
+temp.pred  <- as.numeric(m.new) + as.numeric(s.new) + fc$pred
+temp.lower <- as.numeric(m.new) + as.numeric(s.new) + fc$l
+temp.upper <- as.numeric(m.new) + as.numeric(s.new) + fc$u
+```
+
+---
+
+# Problem 2
+
+```{r}
+#| label: combined-plot
+#| fig-height: 5
+
+# --- Axis setup: one tick per day, including May 8 ---
+all.ticks  <- 24*(0:7) + 1
+all.labels <- paste("May", 1:8)
+
+# --- y-axis range to fit all series ---
+y.min <- min(c(as.numeric(temp), temp.pred, temp.lower, temp.may8)) - 1
+y.max <- max(c(as.numeric(temp), temp.pred, temp.upper, temp.may8)) + 1
+
+# --- Training data: May 1–7 ---
+plot(1:n, as.numeric(temp),
+     type = "l", col = "black", lwd = 1,
+     xlim = c(1, n + h), ylim = c(y.min, y.max),
+     main = "Hourly Toronto Temperature: May 1–8, 2003",
+     xlab = "Date (May 2003)",
+     ylab = "Temperature (°C)",
+     xaxt = 'n')
+axis(side = 1, at = all.ticks, labels = all.labels, las = 1)
+
+# Add a vertical line separating observed from forecast
+abline(v = n + 0.5, lty = 3, col = "gray50")
+
+# --- Predicted values: May 8 ---
+lines(t.new, temp.pred, col = "blue", lwd = 2)
+
+# --- 95% confidence bands (dashed) ---
+lines(t.new, temp.lower, col = "blue", lty = 2)
+lines(t.new, temp.upper, col = "blue", lty = 2)
+
+# --- Actual May 8 temperatures (dashed red) ---
+lines(t.new, temp.may8, col = "red", lty = 2, lwd = 2)
+
+# --- Legend ---
+legend("topleft",
+       legend = c("Observed (May 1–7)", "Predicted (May 8)",
+                  "95% Confidence Bands", "Actual (May 8)"),
+       col    = c("black", "blue", "blue", "red"),
+       lty    = c(1, 1, 2, 2),
+       lwd    = c(1, 2, 1, 2),
+       bty    = "n",
+       cex    = 0.85)
+```
+
+**Commentary:** The ARMA(1,1) model — fitted to residuals after removing a quadratic trend and a 24-hour harmonic seasonal component — captures the dominant diurnal cycle in Toronto's temperature. Looking at the plot, we can assess forecast quality by checking whether the actual May 8 temperatures (red dashed line) fall within the 95% confidence bands (blue dashed lines) and track closely with the predicted values (blue solid line). The model is expected to perform well for the first several hours of the forecast, where the diurnal pattern from the previous week provides a reliable baseline. Accuracy may degrade toward the end of the 24-hour horizon if the actual weather on May 8 departs from the modeled pattern (e.g., due to a weather system change). If the actual values lie mostly within the confidence bands, the ARMA(1,1) model provides a statistically adequate one-day-ahead forecast.
+
+---
+
+# Problem 3
+
+We are given two uncorrelated, zero-mean random variables $A_1, A_2$ with unit variance:
+$$
+E[A_1] = E[A_2] = 0, \quad \text{Var}(A_1) = \text{Var}(A_2) = 1, \quad \text{Cov}(A_1, A_2) = 0
+$$
+
+and the harmonic process:
+$$
+X_t = A_1\cos(\omega t) + A_2\sin(\omega t), \qquad t = 0, \pm 1, \ldots
+$$
+
+**Step 1 — Autocovariance function.**
+
+Since $E[X_t] = 0$ for all $t$:
+$$
+\gamma_X(s, t)
+= E[X_s X_t]
+= E\!\left[(A_1\cos\omega s + A_2\sin\omega s)(A_1\cos\omega t + A_2\sin\omega t)\right]
+$$
+$$
+= E[A_1^2]\cos(\omega s)\cos(\omega t) + E[A_1 A_2]\cos(\omega s)\sin(\omega t)
++ E[A_2 A_1]\sin(\omega s)\cos(\omega t) + E[A_2^2]\sin(\omega s)\sin(\omega t)
+$$
+
+Using $E[A_1^2] = E[A_2^2] = 1$ and $E[A_1 A_2] = 0$:
+$$
+\gamma_X(s, t) = \cos(\omega s)\cos(\omega t) + \sin(\omega s)\sin(\omega t) = \cos\!\left(\omega(s-t)\right)
+$$
+
+So $\gamma(h) = \cos(\omega h)$ — the process is stationary.
+
+**Step 2 — Setting up the prediction equations.**
+
+The best linear predictor $P_2 X_3 = a_1 X_2 + a_2 X_1$ satisfies the system $\Gamma \mathbf{a} = \boldsymbol{\gamma}$:
+$$
+\begin{pmatrix} \gamma(0) & \gamma(1) \\ \gamma(1) & \gamma(0) \end{pmatrix}
+\begin{pmatrix} a_1 \\ a_2 \end{pmatrix}
+=
+\begin{pmatrix} \gamma(1) \\ \gamma(2) \end{pmatrix}
+\implies
+\begin{pmatrix} 1 & \cos\omega \\ \cos\omega & 1 \end{pmatrix}
+\begin{pmatrix} a_1 \\ a_2 \end{pmatrix}
+=
+\begin{pmatrix} \cos\omega \\ \cos(2\omega) \end{pmatrix}
+$$
+
+**Step 3 — Solve the system.**
+
+From the first equation: $a_1 = \cos\omega(1 - a_2)$. Substituting into the second:
+$$
+\cos^2\omega\,(1 - a_2) + a_2 = \cos(2\omega)
+\implies \cos^2\omega + a_2\sin^2\omega = \cos^2\omega - \sin^2\omega
+$$
+$$
+\implies a_2\sin^2\omega = -\sin^2\omega \implies \boxed{a_2 = -1}
+\qquad\text{(for }\omega \notin \{0, \pi\}\text{)}
+$$
+$$
+a_1 = \cos\omega\,(1 - (-1)) = 2\cos\omega
+$$
+
+Therefore:
+$$
+\boxed{P_2 X_3 = 2\cos(\omega)\, X_2 - X_1}
+$$
+
+**Step 4 — Mean Squared Error.**
+
+$$
+\mathrm{MSE}(P_2 X_3)
+= \gamma(0) - a_1\,\gamma(1) - a_2\,\gamma(2)
+= 1 - 2\cos^2\omega - (-1)\cos(2\omega)
+$$
+$$
+= 1 - 2\cos^2\omega + (2\cos^2\omega - 1) = \boxed{0}
+$$
+
+**Interpretation:** The MSE is zero because $X_t$ is perfectly deterministic: given $X_1$ and $X_2$, we can solve uniquely for $A_1$ and $A_2$ (as long as the $2 \times 2$ system is non-singular), and then compute $X_3$ exactly. The harmonic recurrence $\cos(\omega(t+1)) = 2\cos\omega\cos(\omega t) - \cos(\omega(t-1))$ confirms that $X_3 = 2\cos(\omega)X_2 - X_1$ holds exactly.
+
+---
+
+# Problem 4
+
+Let $X_1, X_2, X_4, X_5$ be from the MA(1) model:
+$$
+X_t = Z_t + \theta Z_{t-1}, \qquad \{Z_t\} \sim wn(0, \sigma^2)
+$$
+
+The autocovariance function of MA(1):
+$$
+\gamma(0) = \sigma^2(1+\theta^2), \qquad \gamma(1) = \sigma^2\theta, \qquad \gamma(h) = 0 \text{ for } |h| \geq 2
+$$
+
+## Part a)
+
+We seek $P(X_3 \mid X_4, X_5) = a_4 X_4 + a_5 X_5$. The normal equations are:
+$$
+\begin{pmatrix}
+\mathrm{Cov}(X_4,X_4) & \mathrm{Cov}(X_4,X_5) \\
+\mathrm{Cov}(X_5,X_4) & \mathrm{Cov}(X_5,X_5)
+\end{pmatrix}
+\begin{pmatrix} a_4 \\ a_5 \end{pmatrix}
+=
+\begin{pmatrix}
+\mathrm{Cov}(X_3, X_4) \\
+\mathrm{Cov}(X_3, X_5)
+\end{pmatrix}
+$$
+
+Noting $\mathrm{Cov}(X_3,X_4) = \gamma(1) = \sigma^2\theta$ and $\mathrm{Cov}(X_3,X_5) = \gamma(2) = 0$, and dividing through by $\sigma^2$:
+
+$$
+\begin{pmatrix} 1+\theta^2 & \theta \\ \theta & 1+\theta^2 \end{pmatrix}
+\begin{pmatrix} a_4 \\ a_5 \end{pmatrix}
+=
+\begin{pmatrix} \theta \\ 0 \end{pmatrix}
+$$
+
+From the second equation: $a_5 = \dfrac{-\theta\, a_4}{1+\theta^2}$. Substituting into the first:
+$$
+(1+\theta^2)\,a_4 - \frac{\theta^2 a_4}{1+\theta^2} = \theta
+\implies a_4 \cdot \frac{(1+\theta^2)^2 - \theta^2}{1+\theta^2} = \theta
+$$
+
+Using $(1+\theta^2)^2 - \theta^2 = 1 + \theta^2 + \theta^4$:
+$$
+a_4 = \frac{\theta(1+\theta^2)}{1+\theta^2+\theta^4}, \qquad
+a_5 = \frac{-\theta^2}{1+\theta^2+\theta^4}
+$$
+
+Therefore:
+$$
+\boxed{P(X_3 \mid X_4, X_5)
+= \frac{\theta(1+\theta^2)}{1+\theta^2+\theta^4}\,X_4
+  - \frac{\theta^2}{1+\theta^2+\theta^4}\,X_5}
+$$
+
+## Part b)
+
+$$
+\mathrm{MSE}
+= \mathrm{Var}(X_3) - \bigl[a_4\,\mathrm{Cov}(X_3,X_4) + a_5\,\mathrm{Cov}(X_3,X_5)\bigr]
+$$
+$$
+= \sigma^2(1+\theta^2)
+  - \frac{\theta(1+\theta^2)}{1+\theta^2+\theta^4}\cdot\sigma^2\theta
+  - \frac{-\theta^2}{1+\theta^2+\theta^4}\cdot 0
+$$
+$$
+= \sigma^2(1+\theta^2)\left[1 - \frac{\theta^2}{1+\theta^2+\theta^4}\right]
+= \sigma^2(1+\theta^2)\cdot\frac{1+\theta^4}{1+\theta^2+\theta^4}
+$$
+
+$$
+\boxed{\mathrm{MSE}\!\left(P(X_3\mid X_4, X_5)\right)
+= \frac{\sigma^2(1+\theta^2)(1+\theta^4)}{1+\theta^2+\theta^4}}
+$$
+
+---
+
+# Problem 5 — Graduate Students Only
+
+The ARMA(1,1) process:
+$$
+Y_t - \tfrac{1}{2}Y_{t-1} = W_t + \tfrac{1}{2}W_{t-1}, \qquad W_t \sim wn(0,\sigma^2)
+$$
+
+So $\phi = \tfrac{1}{2}$, $\theta = \tfrac{1}{2}$.
+
+Using the autocovariance formula for the ARMA(1,1) process (B\&D, p.~78):
+$$
+\gamma(0) = \frac{\sigma^2(1 + 2\phi\theta + \theta^2)}{1-\phi^2}, \qquad
+\gamma(1) = \frac{\sigma^2(\phi+\theta)(1+\phi\theta)}{1-\phi^2}
+$$
+
+Substituting $\phi = \theta = \tfrac{1}{2}$:
+
+$$
+\gamma(0)
+= \frac{\sigma^2\!\left(1 + 2\cdot\tfrac{1}{4} + \tfrac{1}{4}\right)}{1 - \tfrac{1}{4}}
+= \frac{\sigma^2 \cdot \tfrac{7}{4}}{\tfrac{3}{4}}
+= \frac{7\sigma^2}{3}
+$$
+
+$$
+\gamma(1)
+= \frac{\sigma^2\!\left(\tfrac{1}{2}+\tfrac{1}{2}\right)\!\left(1+\tfrac{1}{4}\right)}{\tfrac{3}{4}}
+= \frac{\sigma^2 \cdot 1 \cdot \tfrac{5}{4}}{\tfrac{3}{4}}
+= \frac{5\sigma^2}{3}
+$$
+
+## Part a)
+
+The best linear predictor of $Y_2$ given $Y_1$ is:
+$$
+P(Y_2 \mid Y_1)
+= \frac{\gamma(1)}{\gamma(0)}\,Y_1
+= \frac{5\sigma^2/3}{7\sigma^2/3}\,Y_1
+= \boxed{\frac{5}{7}\,Y_1}
+$$
+
+## Part b)
+
+$$
+\mathrm{MSE}\!\left(P(Y_2\mid Y_1)\right)
+= \gamma(0) - \frac{[\gamma(1)]^2}{\gamma(0)}
+= \frac{7\sigma^2}{3} - \frac{\left(\tfrac{5\sigma^2}{3}\right)^{\!2}}{\tfrac{7\sigma^2}{3}}
+= \frac{7\sigma^2}{3} - \frac{25\sigma^2}{21}
+= \frac{49\sigma^2 - 25\sigma^2}{21}
+= \boxed{\frac{8\sigma^2}{7}}
+$$
+
+---
+
+*Resources used: Brockwell \& Davis "Introduction to Time Series and Forecasting" (textbook), Workshop 2 \& 3 notes (trend/seasonal decomposition and ARMA simulation), R `itsmr` package, and Claude AI for coding assistance and LaTeX formatting.*
