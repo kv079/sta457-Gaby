@@ -156,15 +156,17 @@ cat("Estimated theta_1 (MA):", round(theta1, 4), "\n")
 cat("Estimated sigma^2:     ", round(sigma2, 4), "\n")
 
 # --- Specify model using workshop function and forecast ---
-arma.model <- specify(ar = phi1, ma = theta1, sigma2 = sigma2)
-# itsmr::forecast() signature: forecast(x, M, a, h, alpha)
-# M is the process mean; residuals are zero-mean after detrending
-fc <- itsmr::forecast(resid, M = 0, a = arma.model, h = h)
+# --- Forecast residuals h steps ahead using base R predict.Arima ---
+fc       <- predict(arma.est, n.ahead = h)
+fc.pred  <- as.numeric(fc$pred)
+fc.se    <- as.numeric(fc$se)
+fc.lower <- fc.pred - qnorm(0.975) * fc.se
+fc.upper <- fc.pred + qnorm(0.975) * fc.se
 
 # --- Reconstruct temperature forecast (add back trend + seasonality) ---
-temp.pred  <- as.numeric(m.new) + as.numeric(s.new) + fc$pred
-temp.lower <- as.numeric(m.new) + as.numeric(s.new) + fc$l
-temp.upper <- as.numeric(m.new) + as.numeric(s.new) + fc$u
+temp.pred  <- as.numeric(m.new) + as.numeric(s.new) + fc.pred
+temp.lower <- as.numeric(m.new) + as.numeric(s.new) + fc.lower
+temp.upper <- as.numeric(m.new) + as.numeric(s.new) + fc.upper
 ```
 
 ---
