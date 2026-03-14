@@ -1,0 +1,180 @@
+---
+title: "Homework 3"
+subtitle: |
+    | STA 457/2202 - Winter 2026
+    | Time Series Analysis
+    | University of Toronto
+format:
+  pdf:
+    fig-width: 8.5
+---
+
+# Setup
+
+```{r}
+#| warning: false
+library(itsmr)
+```
+
+# Problem 1
+
+## Part 1)
+
+Load the dataset and extract the hourly temperature series from
+2003-05-01 (00:00) to 2003-05-07 (23:00), giving 168 observations.
+
+```{r}
+toronto <- read.csv("Toronto_heat.csv")
+
+# Filter to May 1--7, 2003 (7 days x 24 hours = 168 observations)
+idx   <- toronto$Year == 2003 & toronto$Month == 5 & toronto$Day <= 7
+temp.ts <- toronto$Temp[idx]
+```
+
+A quick look at the series:
+
+```{r}
+#| fig-height: 4
+
+N <- length(temp.ts)   # should be 168
+
+# Tick every 24 observations (= 1 day), labelled May 1 through May 7
+day.ticks  <- seq(1, N, by = 24)
+day.labels <- paste("May", 1:7)
+
+par(mar = c(5, 4, 4, 2))
+plot.ts(temp.ts,
+        main = "Hourly Toronto Temperature",
+        xlab = "Date (May 2003)",
+        ylab = "Temperature (°C)",
+        xaxt = "n")
+axis(1, at = day.ticks, labels = day.labels, las = 2)
+mtext("Observed: 2003-05-01 00:00 — 2003-05-07 23:00")
+```
+
+## Part 2)
+
+Use the `forecast()` function from `itsmr` to predict the temperature
+for the 24 hours of 2003-05-08, based on an ARMA(1,1) model that
+accounts for a quadratic trend and a seasonal component with period 24.
+
+```{r}
+# --- Structural model: quadratic trend + period-24 seasonality
+M <- list("trend", 2, "season", 24)
+
+# Step 1: Estimate quadratic trend
+m.hat <- trend(temp.ts, p = 2)
+
+# Step 2: Estimate seasonal component (period = 24 h) from detrended series
+s.hat <- season(temp.ts - m.hat, d = 24)
+
+# Step 3: Residuals after removing trend and seasonality
+resid <- temp.ts - m.hat - s.hat
+
+# Step 4: Fit ARMA(1,1) to residuals using Hannan-Rissanen method
+a <- hannan(resid, p = 1, q = 1)
+
+# Step 5: Forecast the next 24 hours using the full structural + ARMA model
+fc <- forecast(temp.ts, h = 24, M = M, a = a)
+
+# Extract predicted values and 95% confidence bands
+pred  <- fc$pred
+upper <- pred + 1.96 * fc$se
+lower <- pred - 1.96 * fc$se
+```
+
+The estimated ARMA(1,1) coefficients are:
+
+```{r}
+library(knitr)
+kable(data.frame(
+  AR1    = a$ar,
+  MA1    = a$ma,
+  Sigma2 = a$sigma2
+), digits = 4, caption = "Estimated ARMA(1,1) parameters")
+```
+
+# Problem 2
+
+Plot the observed series (May 1–7), the forecast (May 8), the 95%
+confidence bands, and the actual May 8 temperatures on a single figure.
+
+```{r}
+#| fig-height: 5.5
+
+# --- Actual May 8 data
+idx8    <- toronto$Year == 2003 & toronto$Month == 5 & toronto$Day == 8
+may8.ts <- toronto$Temp[idx8]   # 24 observations
+
+# --- Index vectors
+n.obs <- length(temp.ts)        # 168
+n.fc  <- 24
+x.obs <- 1:n.obs
+x.fc  <- (n.obs + 1):(n.obs + n.fc)
+
+# --- x-axis: one tick per day, May 1 through May 8
+day.ticks  <- c(seq(1, n.obs, by = 24), n.obs + 1)
+day.labels <- paste("May", 1:8)
+
+# --- y range covering all series
+y.range <- range(c(temp.ts, pred, upper, lower, may8.ts))
+
+par(mar = c(5, 4, 4, 2))
+
+# Observed series (May 1--7)
+plot(x.obs, temp.ts,
+     type  = "l",
+     xlim  = c(1, n.obs + n.fc),
+     ylim  = y.range,
+     xaxt  = "n",
+     main  = "Hourly Toronto Temperature: May 1–8, 2003",
+     xlab  = "Date (May 2003)",
+     ylab  = "Temperature (°C)")
+
+# Custom x-axis with daily ticks
+axis(1, at = day.ticks, labels = day.labels, las = 2)
+
+# Vertical separator between observed and forecast
+abline(v = n.obs + 0.5, lty = 3, col = "gray60")
+
+# Forecast (May 8)
+lines(x.fc, pred, col = "blue", lwd = 2)
+
+# 95% confidence bands (dashed)
+lines(x.fc, upper, col = "blue", lty = 2)
+lines(x.fc, lower, col = "blue", lty = 2)
+
+# Actual May 8 temperature (dashed red)
+lines(x.fc, may8.ts, col = "red", lty = 2, lwd = 2)
+
+# Legend
+legend("topleft",
+       legend = c("Observed (May 1–7)",
+                  "Forecast (May 8)",
+                  "95% Confidence Band",
+                  "Actual (May 8)"),
+       col    = c("black", "blue", "blue", "red"),
+       lty    = c(1, 1, 2, 2),
+       lwd    = c(1, 2, 1, 2),
+       bty    = "n",
+       cex    = 0.85)
+```
+
+**Commentary:** The ARMA(1,1) forecast with quadratic trend and
+period-24 seasonality captures the broad daily cycle well — the
+predicted temperatures rise during daytime hours and fall overnight,
+consistent with the pattern seen in May 1–7. However, the width of the
+95% confidence band grows noticeably over the 24-hour horizon,
+reflecting the increasing uncertainty inherent in multi-step-ahead
+prediction. Comparing the forecast (solid blue) to the actual May 8
+temperatures (dashed red), the predicted daily cycle matches the
+observed trajectory reasonably well if the weather on May 8 is similar
+to the preceding week; discrepancies are likely where day-to-day
+meteorological variability (e.g., clouds or a passing weather system)
+causes the actual temperatures to deviate from the seasonal norm
+estimated from only 7 days of data.
+
+---
+
+*Resources used: `itsmr` package (Brockwell & Davis), R documentation
+for `trend`, `season`, `hannan`, and `forecast`.*
